@@ -1,0 +1,225 @@
+-- FPS Boost v2 (максимальный буст для телефона)
+-- 1) Убирает ВСЕ текстуры: декали, текстуры, PBR, текстуры мешей, одежду, небо
+-- 2) Сложные модели (меши, юнионы) заменяет простыми кубами
+-- 3) Убирает ВСЕ эффекты: частицы, огонь, дым, следы, лучи, свет, пост-эффекты, туман
+-- Всё делается только на твоей стороне. Чтобы вернуть графику: перезайди в игру.
+
+local CONFIG = {
+	FPS_CAP               = 1000,  -- лимит FPS (если поддерживает среда)
+	SHOW_FPS              = true,  -- счётчик FPS в углу
+
+	REMOVE_TEXTURES       = true,  -- декали, текстуры, PBR, текстуры мешей, одежда
+	REMOVE_SKY            = true,  -- убрать небо, облака, атмосферу
+	BLOCKIFY_MODELS       = true,  -- меши и юнионы -> простые кубы
+	BLOCKIFY_OWN_CHARACTER= false, -- true = и своего персонажа в кубы (может глючить физика)
+	REMOVE_ACCESSORIES    = true,  -- убрать аксессуары (шапки, крылья и т.д.) у всех игроков
+	REMOVE_EFFECTS        = true,  -- частицы, огонь, дым, следы, лучи, свет, подсветки
+	FLAT_MATERIALS        = true,  -- все детали в простой Plastic без отражений
+}
+
+local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local function try(f, ...) return pcall(f, ...) end
+
+-- ===== Глобальные настройки рендера =====
+try(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+try(function() settings().Rendering.MeshPartDetailLevel = Enum.MeshPartDetailLevel.Level04 end)
+try(function() settings().Rendering.EagerBulkExecution = true end)
+if setfpscap then try(setfpscap, CONFIG.FPS_CAP) end
+
+-- ===== Освещение =====
+try(function() Lighting.GlobalShadows = false end)
+try(function() Lighting.FogEnd = 9e9 end)
+try(function() Lighting.FogStart = 9e9 end)
+try(function() Lighting.EnvironmentDiffuseScale = 0 end)
+try(function() Lighting.EnvironmentSpecularScale = 0 end)
+try(function() Lighting.ShadowSoftness = 0 end)
+try(function() Lighting.Brightness = 2 end)
+try(function() Lighting.Ambient = Color3.fromRGB(170, 170, 170) end)
+try(function() Lighting.OutdoorAmbient = Color3.fromRGB(170, 170, 170) end)
+try(function() sethiddenproperty(Lighting, "Technology", Enum.Technology.Compatibility) end)
+
+-- материалы с кастомными текстурами
+try(function()
+	local MS = game:GetService("MaterialService")
+	MS.Use2022Materials = false
+	for _, v in ipairs(MS:GetChildren()) do v:Destroy() end
+end)
+
+-- ===== Вода и трава =====
+local terrain = workspace:FindFirstChildOfClass("Terrain")
+if terrain then
+	try(function() terrain.WaterWaveSize = 0 end)
+	try(function() terrain.WaterWaveSpeed = 0 end)
+	try(function() terrain.WaterReflectance = 0 end)
+	try(function() terrain.WaterTransparency = 0 end)
+	try(function() sethiddenproperty(terrain, "Decoration", false) end)
+end
+
+-- ===== Вспомогательное =====
+local function inOwnCharacter(o)
+	local c = player.Character
+	return c ~= nil and o:IsDescendantOf(c)
+end
+
+-- замена меша/юниона кубом: оригинал прячем, куб приваривается и следует за ним
+local function blockify(o)
+	if o:FindFirstChild("FpsBlock") then return end
+	if not CONFIG.BLOCKIFY_OWN_CHARACTER and inOwnCharacter(o) then return end
+
+	local block = Instance.new("Part")
+	block.Name = "FpsBlock"
+	block.Size = o.Size
+	block.Color = o.Color
+	block.Material = Enum.Material.Plastic
+	block.Transparency = o.Transparency
+	block.CanCollide = false
+	block.CanQuery = false
+	block.CanTouch = false
+	block.CastShadow = false
+	block.Massless = true
+	block.TopSurface = Enum.SurfaceType.Smooth
+	block.BottomSurface = Enum.SurfaceType.Smooth
+	block.CFrame = o.CFrame
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = o
+	weld.Part1 = block
+	weld.Parent = block
+	block.Parent = o
+
+	if o.Transparency < 1 then o.Transparency = 1 end
+end
+
+local function optimize(o)
+	-- ===== детали =====
+	if o:IsA("BasePart") then
+		o.CastShadow = false
+		if CONFIG.FLAT_MATERIALS then
+			o.Material = Enum.Material.Plastic
+			o.Reflectance = 0
+		end
+		if o:IsA("MeshPart") then
+			if CONFIG.REMOVE_TEXTURES then try(function() o.TextureID = "" end) end
+			try(function() o.RenderFidelity = Enum.RenderFidelity.Performance end)
+			if CONFIG.BLOCKIFY_MODELS then blockify(o) end
+		elseif o:IsA("UnionOperation") then
+			try(function() o.RenderFidelity = Enum.RenderFidelity.Performance end)
+			if CONFIG.BLOCKIFY_MODELS then blockify(o) end
+		end
+		return
+	end
+
+	-- ===== простые меши (SpecialMesh) -> кубы =====
+	if o:IsA("SpecialMesh") then
+		if CONFIG.REMOVE_TEXTURES then try(function() o.TextureId = "" end) end
+		if CONFIG.BLOCKIFY_MODELS then
+			try(function()
+				o.MeshId = ""
+				o.MeshType = Enum.MeshType.Brick
+				o.Scale = Vector3.new(1, 1, 1)
+			end)
+		end
+		return
+	end
+
+	-- ===== текстуры =====
+	if CONFIG.REMOVE_TEXTURES then
+		if o:IsA("Decal") or o:IsA("Texture") or o:IsA("SurfaceAppearance")
+			or o:IsA("Shirt") or o:IsA("Pants") or o:IsA("ShirtGraphic") or o:IsA("CharacterMesh") then
+			o:Destroy()
+			return
+		end
+	end
+
+	-- ===== аксессуары =====
+	if CONFIG.REMOVE_ACCESSORIES and o:IsA("Accessory") then
+		o:Destroy()
+		return
+	end
+
+	-- ===== эффекты =====
+	if CONFIG.REMOVE_EFFECTS then
+		if o:IsA("ParticleEmitter") or o:IsA("Trail") or o:IsA("Beam") or o:IsA("Smoke")
+			or o:IsA("Fire") or o:IsA("Sparkles") or o:IsA("PointLight") or o:IsA("SpotLight")
+			or o:IsA("SurfaceLight") then
+			o.Enabled = false
+		elseif o:IsA("PostEffect") then
+			o.Enabled = false
+		elseif o:IsA("Highlight") then
+			o.Enabled = false
+		elseif o:IsA("Explosion") then
+			o.Visible = false
+		elseif o:IsA("ForceField") then
+			o.Visible = false
+		end
+	end
+end
+
+local function optimizeLighting(o)
+	if CONFIG.REMOVE_EFFECTS and o:IsA("PostEffect") then
+		try(function() o.Enabled = false end)
+	elseif CONFIG.REMOVE_SKY and (o:IsA("Sky") or o:IsA("Atmosphere") or o:IsA("Clouds")) then
+		try(function() o:Destroy() end)
+	end
+end
+
+-- ===== Освещение: небо, атмосфера, пост-эффекты =====
+for _, o in ipairs(Lighting:GetDescendants()) do optimizeLighting(o) end
+Lighting.DescendantAdded:Connect(optimizeLighting)
+if terrain and CONFIG.REMOVE_SKY then
+	for _, o in ipairs(terrain:GetChildren()) do optimizeLighting(o) end
+end
+
+-- ===== Обработка мира пачками (чтобы телефон не зависал) =====
+task.spawn(function()
+	local n = 0
+	for _, o in ipairs(workspace:GetDescendants()) do
+		try(optimize, o)
+		n += 1
+		if n % 300 == 0 then task.wait() end
+	end
+end)
+
+-- новые объекты (респавны, спавн NPC, эффекты оружия и т.д.)
+workspace.DescendantAdded:Connect(function(o)
+	try(optimize, o)
+end)
+
+-- ===== Счётчик FPS =====
+if CONFIG.SHOW_FPS then
+	local parent = (gethui and gethui()) or player:WaitForChild("PlayerGui")
+	local old = parent:FindFirstChild("FpsBoostGui")
+	if old then old:Destroy() end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "FpsBoostGui"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 999
+	gui.Parent = parent
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(0, 70, 0, 20)
+	label.Position = UDim2.new(1, -80, 0, 6)
+	label.BackgroundColor3 = Color3.new(0, 0, 0)
+	label.BackgroundTransparency = 0.4
+	label.TextColor3 = Color3.fromRGB(100, 255, 120)
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 12
+	label.Text = "FPS: --"
+	label.Parent = gui
+	Instance.new("UICorner", label).CornerRadius = UDim.new(0, 5)
+
+	local frames, last = 0, os.clock()
+	RunService.RenderStepped:Connect(function()
+		frames += 1
+		local now = os.clock()
+		if now - last >= 0.5 then
+			label.Text = "FPS: " .. math.floor(frames / (now - last))
+			frames, last = 0, now
+		end
+	end)
+end
